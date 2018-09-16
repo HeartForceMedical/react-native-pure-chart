@@ -1,15 +1,12 @@
 import React from 'react'
 import { View, TouchableWithoutFeedback, Text, Animated, Easing, ScrollView, StyleSheet } from 'react-native'
 import { Toast } from "@remobile/react-native-toast"
-import { ResultsMsg } from '../../../../../out/Messages';
 
-// Input is an array of Y
 class LineChart extends React.Component {
   constructor (props) {
     super(props)
     this.state = {
-      data: this.props.data,
-      gap: this.props.gap
+      data: this.props.data
     };
 
     this.drawCoordinates = this.drawCoordinates.bind(this);
@@ -22,18 +19,34 @@ class LineChart extends React.Component {
 
   componentWillReceiveProps (nextProps) {
     if (nextProps.data !== this.props.data) {
-      this.setState({data : nextProps.data, gap: nextProps.gap});
+      this.setState({data : nextProps.data});
     }
   }
 
-  getTransform (translateX, translateY, angle) {
-    return [ { translateX: translateX }, { translateY: translateY }, { rotate: angle + 'rad' } ]
+  getTransform (angle, width) {
+    let x = (0 - width / 2) * Math.cos(angle) - (0 - width / 2) * Math.sin(angle);
+    let y = (0 - width / 2) * Math.sin(angle) + (0 - width / 2) * Math.cos(angle);
+
+    return [ {translateX: (-1 * x) - width / 2}, {translateY: (-1 * y) + width / 2}, { rotate: angle + 'rad' } ];
   }
 
-  drawCoordinate (index, dy, dx, size, height, top, angle, translateX, translateY, 
-    backgroundColor, lineStyle, isBlank, lastCoordinate) {
+  drawCoordinate (index, start, end, gap, backgroundColor, lineStyle, lastCoordinate) {
     let key = 'line' + index;
+    let dx = gap;
+    let dy = end.Y - start.Y;
+    let size = Math.sqrt(dx * dx + dy * dy);
+    let angleRad = -1 * Math.atan2(dy, dx);
+    let height;
+    let top;
     let topMargin = 20;
+
+    if (start.Y > end.Y) {
+      height = start.Y;
+      top = -1 * size;
+    } else {
+      height = end.Y;
+      top = -1 * (size - Math.abs(dy));
+    }
 
     return (
       <View key={key} style={{
@@ -49,9 +62,9 @@ class LineChart extends React.Component {
             top: top,
             width: size,
             height: size,
-            borderColor: isBlank ? backgroundColor : this.props.primaryColor,
+            borderColor: lastCoordinate ? backgroundColor : this.props.primaryColor,
             borderTopWidth: 1,
-            transform: this.getTransform(translateX, translateY, angle)
+            transform: this.getTransform(angleRad, size)
           }, styles.lineBox, lineStyle])} />
           <View style={StyleSheet.flatten([styles.absolute, {
             height: height - Math.abs(dy) - 2,
@@ -75,33 +88,24 @@ class LineChart extends React.Component {
     for (let i = 0; i < dataLength - 1; i++) {
       let result = this.drawCoordinate(
         i, 
-        data[i].DY, 
-        this.state.gap,
-        data[i].Size, 
-        data[i].Height,
-        data[i].Top,
-        data[i].Angle,
-        data[i].TranslateX,
-        data[i].TranslateY,
-       '#FFFFFF00', {borderColor: this.props.primaryColor}, 
-       false, false);
+        data[i],
+        data[i+1],
+        this.props.gap,
+       '#FFFFFF00', 
+       {borderColor: this.props.primaryColor}, 
+       false);
       results.push(result);
     }
 
-    let i = dataLength-1
+    let i = dataLength-1;
     result = this.drawCoordinate(
-       dataLength, 
+       i, 
        data[i], 
-       data[i].DY,
-       this.state.gap,
-       data[i].Size,
-       data[i].Height,
-       data[i].Top,
-       data[i].Angle,
-       data[i].TranslateX,
-       data[i].TranslateY, 
-       '#FFFFFF', {}, 
-       true, true);
+       data[i],
+       this.props.gap,
+       '#FFFFFF', 
+       {}, 
+       true);
     results.push(result);
     
     return results;
@@ -131,12 +135,9 @@ class LineChart extends React.Component {
 
 LineChart.defaultProps = {
   data: [],
-  primaryColor: '#297AB1',
-  selectedColor: '#FF0000',
+  gap: 5,
   height: 100,
-  onPointClick: (point) => {
-  },
-  numberOfYAxisGuideLine: 5
+  primaryColor: '#297AB1'
 }
 
 const styles = StyleSheet.create({
