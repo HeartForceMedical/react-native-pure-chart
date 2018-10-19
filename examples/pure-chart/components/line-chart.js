@@ -1,16 +1,18 @@
 import React from 'react';
-import { View, TouchableWithoutFeedback, Text, Animated, Easing, ScrollView, StyleSheet } from 'react-native';
-import { Toast } from "@remobile/react-native-toast";
+import { View, StyleSheet } from 'react-native';
 
+// Expects the data in the 0-1 range (scaled by min/max of the data)
 class LineChart extends React.Component {
   constructor (props) {
     super(props)
     this.state = { data: this.props.data };
 
-    this.cachedObjs = [];
+    this.cachedLines = [];
+    this.height = -1;
 
     this.drawCoordinates = this.drawCoordinates.bind(this);
     this.drawCoordinate = this.drawCoordinate.bind(this);
+    this.setHeight = this.setHeight.bind(this);
   }
 
   shouldComponentUpdate (nextProps, nextState) {
@@ -23,6 +25,11 @@ class LineChart extends React.Component {
     }
   }
 
+  // The current chart y values are scaled given the given chart view's height
+  scaleByHeight(y) {
+    return y * this.height * 0.5;
+  }
+
   drawCoordinates (data) {
     let results = [];
 
@@ -31,9 +38,6 @@ class LineChart extends React.Component {
       result = this.drawCoordinate(
         data[i],
         data[i+1],
-        this.props.gap,
-        '#FFFFFF00',
-        {borderColor: this.props.primaryColor},
         false);
       results.push(result);
     }
@@ -43,40 +47,29 @@ class LineChart extends React.Component {
     result = this.drawCoordinate(
       data[i],
       data[i],
-      this.props.gap,
-      '#FFFFFF',
-      {},
       true);
     results.push(result);
 
-    // Remove the first point from the last set
-    this.cachedObjs = this.cachedObjs.slice(2);
+    // Remove the first points from the last set
+    this.cachedLines = this.cachedLines.slice(2);
     return results;
   }
 
-  drawCoordinate (start, end, gap, backgroundColor, lineStyle, isLastCoord) {
-    let dx, dy, size, angle, height, top;
+  drawCoordinate (start, end, isLastCoord) {
+    let dy;
+    let size; // width and height of the inner box
+    let angle;
+    let dx; // width of the outer box
+    let height; // height of the outer box
+    let top;
+    let startY = this.scaleByHeight(start.Y);
+    let endY = this.scaleByHeight(end.Y);
     // Don't recompute a line that has already been computed from the last set.
     let idStr = "line-" + start.Id.toString();
-    let isCached = this.cachedObjs.hasOwnProperty(idStr);
-    if (!isCached) {
-      dx = gap;
-      dy = end.Y - start.Y;
-      size = Math.sqrt(dx * dx + dy * dy);
-      angle = -1 * Math.atan2(dy, dx);
-      if (start.Y > end.Y) {
-        height = start.Y;
-        top = -1 * size;
-      }
-      else {
-        height = end.Y;
-        top = -1 * (size - Math.abs(dy));
-      }
-      // Cache this key-value pair.
-      this.cachedObjs[idStr] = { dx: dx, dy: dy, size: size, angle: angle, height: height, top: top };
-    }
-    else {
-      var cachedObj = this.cachedObjs[idStr];
+    let isCached = this.cachedLines.hasOwnProperty(idStr);
+    let gap = this.props.gap;
+    if (isCached) {
+      var cachedObj = this.cachedLines[idStr];
       dx = cachedObj.dx;
       dy = cachedObj.dy;
       size = cachedObj.size;
@@ -84,158 +77,111 @@ class LineChart extends React.Component {
       height = cachedObj.height;
       top = cachedObj.top;
     }
-
-    let topMargin = 20;
+    else {
+      dx = gap;
+      dy = endY - startY;
+      size = Math.sqrt(dx * dx + dy * dy);
+      angle = -1 * Math.atan2(dy, dx);
+      if (startY > endY) {
+        height = 2 * startY;
+        // For example
+        // Let's say dx = 3, dy = 4. size = 5, top = -5 w.r.t box with dimensions 5x5
+        top = -1 * size;
+      }
+      else {
+        height = 2 * endY;
+        // For example
+        // Let's say dx = 3, dy = 4. size = 5, top = -1 w.r.t box with dimensions 5x5
+        top = -1 * (size - Math.abs(dy));
+      }
+      // Cache this key-value pair.
+      this.cachedLines[idStr] = {
+        dx: dx,
+        dy: dy,
+        size: size,
+        angle: angle,
+        height: height,
+        top: top };
+    }
 
     return (
       <View key={idStr} style={{
-        height: this.props.height + topMargin,
-        justifyContent: 'flex-end'
-      }}>
+        width: dx,
+        height: height,
+        overflow: 'hidden'}}>
         <View style={StyleSheet.flatten([{
-          width: dx,
-          height: height,
-          marginTop: topMargin
-        }, styles.coordinateWrapper])}>
-          <View style={StyleSheet.flatten([{
-            top: top,
-            width: size,
-            height: size,
-            borderColor: isLastCoord ? backgroundColor : this.props.primaryColor,
-            borderTopWidth: 1,
-            transform: this.getTransform(idStr, isCached)
-          }, styles.lineBox, lineStyle])} 
-          />
-          <View style={StyleSheet.flatten([styles.absolute, {
-            height: height - Math.abs(dy) - 2,
-            backgroundColor: isLastCoord ? '#FFFFFF00' : backgroundColor,
-            marginTop: Math.abs(dy) + 2
-          }])} />
-        </View>
-        {!isLastCoord ? (
-          <View style={StyleSheet.flatten([styles.guideLine, {
-            width: dx,
-            borderRightColor: this.props.xAxisGridLineColor
-          }])} />
-        ) : null}
+          top: top,
+          width: size,
+          height: size,
+          borderColor: isLastCoord ? '#FFFFFF' : this.props.lineColor,
+          borderTopWidth: 2,
+          overflow: 'hidden',
+          transform: this.getTransform(idStr, isCached),
+        }, isLastCoord ? {} : { borderColor: this.props.lineColor }])} />
       </View>
     )
   }
 
+  // Generate a sine curve between the start and end points
   getTransform (idStr, isCached) {
     let translateX, translateY, angle;
-    let cachedObj = this.cachedObjs[idStr];
-    if (!isCached) {
-      angle = cachedObj.angle;
-      let size = cachedObj.size;
-      let x = (0 - size / 2) * Math.cos(angle) - (0 - size / 2) * Math.sin(angle);
-      let y = (0 - size / 2) * Math.sin(angle) + (0 - size / 2) * Math.cos(angle);
-
-      translateX = (-1 * x) - size / 2;
-      cachedObj.translateX = translateX;
-      translateY = (-1 * y) + size / 2;
-      cachedObj.translateY = translateY;
-    }
-    else {
+    let cachedObj = this.cachedLines[idStr];
+    if (isCached) {
       translateX = cachedObj.translateX;
       translateY = cachedObj.translateY;
       angle = cachedObj.angle;
+    }
+    else {
+      angle = cachedObj.angle;
+      let size = cachedObj.size;
+
+      let k = (0 - size / 2);
+      let s = size / 2;
+      let x = k * (Math.cos(angle) - Math.sin(angle));
+      translateX = (-1 * x) - s;
+      let y = k * (Math.sin(angle) + Math.cos(angle));
+      translateY = (-1 * y) + s;
+
+      cachedObj.translateX = translateX;
+      cachedObj.translateY = translateY;
     }
 
     return [ { translateX: translateX }, { translateY: translateY }, { rotate: angle + 'rad' } ];
   }
 
+  setHeight(layout) {
+    this.height = layout.height;
+  }
+
   render () {
-    return (
-      this.state.data.length > 0 ? (
-        <View style={StyleSheet.flatten([styles.wrapper, {
-          backgroundColor: this.props.backgroundColor
-        }])}>
-          <View ref='chartView' style={styles.chartViewWrapper}>
-            <View key={'animated_'} style={{
-              flexDirection: 'row',
-              alignItems: 'flex-end',
-              height: '100%',
-              position: 'relative',
-              minWidth: 200}}>
-              { this.drawCoordinates(this.state.data) }
-            </View>
-          </View>
-        </View>
-      ) : null
-    )
+    if (this.state.data.length > 0) {
+      return <View ref='chartView' 
+        onLayout={ (event) => { this.setHeight(event.nativeEvent.layout) } }
+        style={{    
+        flexDirection: 'row',
+        margin: 0,
+        paddingRight: 0,
+        height: '100%',
+        alignItems: 'center',
+        justifyContent: 'flex-start',
+        overflow: 'hidden',
+        backgroundColor: 'transparent'}}>
+        { this.drawCoordinates(this.state.data) }
+      </View>
+    }
+    else {
+      return null;
+    }
   }
 }
 
 LineChart.defaultProps = {
   data: [],
+  lineColor: '#297AB1',
   gap: 5,
-  height: 100,
-  primaryColor: '#297AB1'
 }
 
-const styles = StyleSheet.create({
-  wrapper: {
-    flexDirection: 'row',
-    overflow: 'hidden'
-  },
-  yAxisLabelsWrapper: {
-    paddingRight: 5
-  },
-  chartViewWrapper: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    margin: 0,
-    paddingRight: 0,
-    overflow: 'hidden'
-  },
-  coordinateWrapper: {
-    overflow: 'hidden',
-    justifyContent: 'flex-start',
-    alignContent: 'flex-start'
-  },
-  lineBox: {
-    overflow: 'hidden',
-    justifyContent: 'flex-start'
-  },
-  guideLine: {
-    position: 'absolute',
-    height: '100%',
-    borderRightColor: '#e0e0e050',
-    borderRightWidth: 1
-  },
-  absolute: {
-    position: 'absolute',
-    width: '100%'
-  },
-  pointWrapper: {
-    position: 'absolute',
-    borderRadius: 10,
-    borderWidth: 1
-  },
-  selectedWrapper: {
-    position: 'absolute',
-    height: '100%',
-    alignItems: 'flex-start'
-  },
-  selectedLine: {
-    position: 'absolute',
-    width: 1,
-    height: '100%'
-  },
-  selectedBox: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 5,
-    opacity: 0.8,
-    borderColor: '#AAAAAA',
-    borderWidth: 1,
-    position: 'absolute',
-    padding: 3,
-    marginLeft: 5,
-    justifyContent: 'center'
-  },
-  tooltipTitle: {fontSize: 10},
-  tooltipValue: {fontWeight: 'bold', fontSize: 15}
-})
+// const styles = StyleSheet.create({
+// })
 
 export default LineChart
