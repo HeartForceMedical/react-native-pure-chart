@@ -1,14 +1,20 @@
 import React from 'react';
 import { View, StyleSheet } from 'react-native';
 
-// Expects the data in the 0-1 range (scaled by min/max of the data)
 class LineChart extends React.Component {
   constructor (props) {
     super(props)
-    this.state = { data: this.props.data };
+    this.state = { point: this.props.point };
 
-    this.cachedLines = [];
+    // Cache these between runs
+    this.lastId = -1;
+    this.cachedData = [];
+    this.cachedRenderingInfo = {}; // Hashmap
+    
     this.height = -1;
+
+    this.min = Number.MAX_VALUE;
+    this.max = Number.MIN_VALUE;
 
     this.drawCoordinates = this.drawCoordinates.bind(this);
     this.drawCoordinate = this.drawCoordinate.bind(this);
@@ -20,8 +26,8 @@ class LineChart extends React.Component {
   }
 
   componentWillReceiveProps (nextProps) {
-    if (nextProps.data !== this.props.data) {
-      this.setState( { data : nextProps.data } );
+    if (nextProps.point !== this.props.point) {
+      this.setState( { point : nextProps.point } );
     }
   }
 
@@ -30,32 +36,73 @@ class LineChart extends React.Component {
     return y * this.height * 0.5;
   }
 
-  drawCoordinates (data) {
-    let results = [];
-
-    // Draw the points
-    for (var i = 0; i < data.length - 1; i++) {
-      result = this.drawCoordinate(
-        data[i],
-        data[i+1],
-        false);
-      results.push(result);
+  computeMinMax (point) {
+    if (this.min > point.Y)
+    {
+      this.min = point.Y;
     }
 
-    // Draw the last coordinate
-    var i = data.length-1;
-    result = this.drawCoordinate(
-      data[i],
-      data[i],
-      true);
-    results.push(result);
-
-    // Remove the first points from the last set
-    this.cachedLines = this.cachedLines.slice(2);
-    return results;
+    if (this.max < point.Y)
+    {
+      this.max = point.Y;
+    }
   }
 
-  drawCoordinate (start, end, isLastCoord) {
+  scale (points, min, max) {
+    let ratio = 0
+    let newPoints = []
+    let diff = max - min
+    if ( diff > 0 ) {
+      ratio = 1.0 / diff;
+    }
+
+    for (var i = 0; i < points.length; i++) {
+      let y = points[i].Y;
+      y = (y - min) * ratio;
+      newPoints.push({ Id : points[i].Id, Y : y });
+    }
+
+    return newPoints;
+  }
+
+  getId (start, end) {
+    return start.Id.toString() + "," + end.Id.toString()
+  }
+
+  drawCoordinates (point) {
+    // The render might be called multiple times for the same point
+    if (this.lastId != point.Id) {
+      this.cachedData.push(point);
+      this.lastId = point.Id;
+      this.computeMinMax(point);
+    }
+
+    // For the first n points, don't render anything.
+    let length = this.cachedData.length;
+    if (length < 102) {
+      return [];
+    }
+
+    // At this point, length is 102.
+    let scaledData = this.scale(this.cachedData, this.min, this.max);
+
+    let views = [];
+    for (var i = 0; i < scaledData.length - 1; i++) {
+      result = this.drawCoordinate(
+        scaledData[i],
+        scaledData[i+1]);
+      views.push(result);
+    }
+
+    // Shift the chart scaledData for a real-time chart appearance
+    let id = this.getId(scaledData[0], scaledData[1]);
+    delete this.cachedRenderingInfo[id];
+    this.cachedData = this.cachedData.slice(1); // For next run
+
+    return views;
+  }
+
+  drawCoordinate (start, end) {
     let dy;
     let size; // width and height of the inner box
     let angle;
@@ -65,11 +112,11 @@ class LineChart extends React.Component {
     let startY = this.scaleByHeight(start.Y);
     let endY = this.scaleByHeight(end.Y);
     // Don't recompute a line that has already been computed from the last set.
-    let idStr = "line-" + start.Id.toString();
-    let isCached = this.cachedLines.hasOwnProperty(idStr);
+    let idStr = this.getId(start, end);
+    let isCached = idStr in this.cachedRenderingInfo;
     let gap = this.props.gap;
     if (isCached) {
-      var cachedObj = this.cachedLines[idStr];
+      var cachedObj = this.cachedRenderingInfo[idStr];
       dx = cachedObj.dx;
       dy = cachedObj.dy;
       size = cachedObj.size;
@@ -84,18 +131,14 @@ class LineChart extends React.Component {
       angle = -1 * Math.atan2(dy, dx);
       if (startY > endY) {
         height = 2 * startY;
-        // For example
-        // Let's say dx = 3, dy = 4. size = 5, top = -5 w.r.t box with dimensions 5x5
         top = -1 * size;
       }
       else {
         height = 2 * endY;
-        // For example
-        // Let's say dx = 3, dy = 4. size = 5, top = -1 w.r.t box with dimensions 5x5
         top = -1 * (size - Math.abs(dy));
       }
-      // Cache this key-value pair.
-      this.cachedLines[idStr] = {
+      this.cachedRenderingInfo[idStr] = {
+        idStr : idStr,
         dx: dx,
         dy: dy,
         size: size,
@@ -113,11 +156,11 @@ class LineChart extends React.Component {
           top: top,
           width: size,
           height: size,
-          borderColor: isLastCoord ? '#FFFFFF' : this.props.lineColor,
-          borderTopWidth: 2,
+          borderColor: this.props.lineColor,
+          borderTopWidth: 1,
           overflow: 'hidden',
           transform: this.getTransform(idStr, isCached),
-        }, isLastCoord ? {} : { borderColor: this.props.lineColor }])} />
+        }, { borderColor: this.props.lineColor }])} />
       </View>
     )
   }
@@ -125,7 +168,7 @@ class LineChart extends React.Component {
   // Generate a sine curve between the start and end points
   getTransform (idStr, isCached) {
     let translateX, translateY, angle;
-    let cachedObj = this.cachedLines[idStr];
+    let cachedObj = this.cachedRenderingInfo[idStr];
     if (isCached) {
       translateX = cachedObj.translateX;
       translateY = cachedObj.translateY;
@@ -154,7 +197,7 @@ class LineChart extends React.Component {
   }
 
   render () {
-    if (this.state.data.length > 0) {
+    if (this.state.point.Id != -1) {
       return <View ref='chartView' 
         onLayout={ (event) => { this.setHeight(event.nativeEvent.layout) } }
         style={{    
@@ -166,7 +209,7 @@ class LineChart extends React.Component {
         justifyContent: 'flex-start',
         overflow: 'hidden',
         backgroundColor: 'transparent'}}>
-        { this.drawCoordinates(this.state.data) }
+        { this.drawCoordinates(this.state.point) }
       </View>
     }
     else {
@@ -176,12 +219,9 @@ class LineChart extends React.Component {
 }
 
 LineChart.defaultProps = {
-  data: [],
+  point: {Id: -1, Y: 0},
   lineColor: '#297AB1',
-  gap: 5,
+  gap: 5
 }
-
-// const styles = StyleSheet.create({
-// })
 
 export default LineChart
